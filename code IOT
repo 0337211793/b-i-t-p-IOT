@@ -1,1 +1,135 @@
+from flask import Flask, jsonify, render_template_string
+import sqlite3
+import time
+import random
+import requests
+
+# ----------------------------------------
+# Cấu hình Firebase và SQLite
+# ----------------------------------------
+FIREBASE_URL = 'https://your-database-name.firebaseio.com/temperature_filtered.json'  # Thay URL của bạn
+DB_FILE = "sensor_data.db"  # Cập nhật tên file DB
+
+# Tạo SQLite Database
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''CREATE TABLE IF NOT EXISTS sensor_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    temperature REAL,
+                    humidity REAL,
+                    pressure REAL,
+                    joystick_x INTEGER,
+                    joystick_y INTEGER
+                )''')
+conn.commit()
+
+# Biến lịch sử và tham số lọc
+history_data = []
+n = 5  # Tham số lịch sử
+
+# ----------------------------------------
+# Flask App
+# ----------------------------------------
+app = Flask(__name__)
+
+# Hàm giả lập nhiệt độ, độ ẩm, áp suất và joystick
+def read_temperature():
+    return round(random.uniform(20, 35), 2)  # Nhiệt độ từ 20°C đến 35°C
+
+def read_humidity():
+    return round(random.uniform(30, 70), 2)  # Độ ẩm từ 30% đến 70%
+
+def read_pressure():
+    return round(random.uniform(980, 1050), 2)  # Áp suất từ 980 hPa đến 1050 hPa
+
+def read_joystick():
+    return random.randint(0, 100), random.randint(0, 100)  # Giá trị joystick (trục X và Y)
+
+# Hàm tính lọc trung bình
+def calculate_filtered_temperature(new_temp, history, n):
+    history.append(new_temp)
+    if len(history) > n:
+        history.pop(0)
+    return round(sum(history) / len(history), 2)
+
+# HTML Giao diện
+html_content = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Thông Số Cảm Biến</title>
+    <script>
+        function fetchData() {
+            fetch('/sensor-data')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('temperature').innerText = data.temperature + " °C";
+                    document.getElementById('humidity').innerText = data.humidity + " %";
+                    document.getElementById('pressure').innerText = data.pressure + " hPa";
+                    document.getElementById('joystick_x').innerText = data.joystick_x;
+                    document.getElementById('joystick_y').innerText = data.joystick_y;
+                    document.getElementById('filtered').innerText = data.filtered_temperature + " °C";
+                });
+        }
+        setInterval(fetchData, 2000);
+        fetchData();
+    </script>
+</head>
+<body>
+    <h1>Thông Số Cảm Biến</h1>
+    <div>Nhiệt độ: <span id="temperature">--</span></div>
+    <div>Độ ẩm: <span id="humidity">--</span></div>
+    <div>Áp suất: <span id="pressure">--</span></div>
+    <div>Joystick X: <span id="joystick_x">--</span></div>
+    <div>Joystick Y: <span id="joystick_y">--</span></div>
+    <div>T lọc: <span id="filtered">--</span></div>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    return render_template_string(html_content)
+
+@app.route("/sensor-data")
+def sensor_data():
+    # Đọc các giá trị cảm biến
+    t = read_temperature()
+    humidity = read_humidity()
+    pressure = read_pressure()
+    joystick_x, joystick_y = read_joystick()
+
+    # Tính t_lọc (nhiệt độ lọc)
+    t_filtered = calculate_filtered_temperature(t, history_data, n)
+
+    # Lưu vào SQLite
+    cursor.execute("""
+        INSERT INTO sensor_data (timestamp, temperature, humidity, pressure, joystick_x, joystick_y)
+        VALUES (datetime('now'), ?, ?, ?, ?, ?)""", (t, humidity, pressure, joystick_x, joystick_y))
+    conn.commit()
+
+    # Lưu t_lọc vào Firebase
+    payload = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "filtered_temperature": t_filtered
+    }
+    try:
+        requests.post(FIREBASE_URL, json=payload)
+    except Exception as e:
+        print(f"Lỗi gửi Firebase: {e}")
+
+    return jsonify({
+        "temperature": t,
+        "humidity": humidity,
+        "pressure": pressure,
+        "joystick_x": joystick_x,
+        "joystick_y": joystick_y,
+        "filtered_temperature": t_filtered
+        
+    })
+
+if __name__ == "__main__":
+    app.run(debug=True, host='0.0.0.0', port=5000)
+
 
